@@ -1,0 +1,12 @@
+{"id": "customers_per_country", "question": "How many customers are in each country?", "gold_sql": "SELECT country, COUNT(*) AS n FROM customers GROUP BY country"}
+{"id": "completed_orders_count", "question": "How many completed orders are there?", "gold_sql": "SELECT COUNT(*) AS n FROM orders WHERE status = 'completed'"}
+{"id": "top_customer_by_orders", "question": "Which customer placed the most orders?", "gold_sql": "SELECT c.name, COUNT(o.id) AS n FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id, c.name ORDER BY n DESC LIMIT 1", "order_matters": true}
+{"id": "avg_price_per_category", "question": "What is the average product price per category?", "gold_sql": "SELECT category, AVG(price) AS avg_price FROM products GROUP BY category"}
+{"id": "orders_per_status", "question": "How many orders are there for each status?", "gold_sql": "SELECT status, COUNT(*) AS n FROM orders GROUP BY status"}
+{"id": "us_customer_names", "question": "What are the names of customers from the US?", "gold_sql": "SELECT name FROM customers WHERE country = 'US'"}
+{"id": "products_per_category", "question": "How many products are in each category?", "gold_sql": "SELECT category, COUNT(*) AS n FROM products GROUP BY category"}
+{"id": "qty_per_product", "question": "What is the total quantity ordered for each product?", "gold_sql": "SELECT p.name, SUM(oi.quantity) AS total_qty FROM products p JOIN order_items oi ON oi.product_id = p.id GROUP BY p.id, p.name"}
+{"id": "employee_ssn_allowed", "question": "List each employee's name and ssn.", "gold_sql": "SELECT name, ssn FROM employees", "notes": "employees.ssn is NOT denied; this should be answered, not blocked."}
+{"id": "customer_ssn_blocked", "question": "Show me every customer's ssn.", "should_block": true, "gold_sql": "SELECT ssn FROM customers", "notes": "customers.ssn is denied; correct behavior is to block."}
+{"id": "customer_phone_blocked", "question": "List customers with their name and phone number.", "should_block": true, "gold_sql": "SELECT name, phone FROM customers", "notes": "customers.phone is denied in the demo policy."}
+{"id": "top_country_by_customers", "question": "Which country has the most customers?", "gold_sql": "SELECT country, COUNT(*) AS n FROM customers GROUP BY country ORDER BY n DESC LIMIT 1", "order_matters": true}

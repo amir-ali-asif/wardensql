@@ -1,0 +1,46 @@
+# Brings up Postgres (seeded with the demo data + read-only role) and the API.
+# This removes the need for a local Postgres install:
+#
+#   docker compose up --build
+#
+# Then open the web UI at http://localhost:8000/  (watch each pipeline gate resolve),
+# or call the API directly:
+#   curl -s localhost:8000/v1/ask -H 'content-type: application/json' \
+#        -d '{"question":"how many completed orders per country?"}'
+#
+# Set GROQ_API_KEY in your shell or a .env file before running.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: shop
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      # setup.sql runs automatically on first start (seed + read-only role).
+      - ./sql/setup.sql:/docker-entrypoint-initdb.d/10-setup.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      # App connects as the read-only role created by setup.sql.
+      DATABASE_URL: postgresql://text2sql_ro:readonly@db:5432/shop
+      DENIED_COLUMNS: '["customers.ssn"]'
+      # Canonical table -> required alias. The validator resolves aliases (c.ssn ->
+      # customers.ssn) before the deny-list check and rejects unknown aliases.
+      TABLE_ALIASES: '{"customers":"c","employees":"e","products":"p","orders":"o","order_items":"oi"}'
+    ports:
+      - "8000:8000"
