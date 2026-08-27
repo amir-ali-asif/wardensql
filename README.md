@@ -1,20 +1,57 @@
-# Warden — production-grade architecture
+# WardenSQL
 
-A natural-language interface that turns plain-English questions into SQL, runs them
-safely against PostgreSQL, enforces data-governance rules, detects hallucinations,
-and returns results with a confidence score — wrapped in the operational layers a
-real service needs: connection pooling, caching, observability, auth, rate limiting,
-a cost guard, containerised deployment, and CI.
+### Natural language to SQL — governed, calibrated, and audit-ready
+
+WardenSQL turns plain-English questions into SQL, runs them safely against a real
+database, enforces column-level data-governance rules, detects hallucinations, and
+returns results with a **calibrated confidence score** — wrapped in the operational
+layers a real service needs: connection pooling, caching, observability, auth, rate
+limiting, a cost guard, containerized deployment, and CI.
+
+Built to investigate what it actually takes to place an LLM in front of a
+production database safely, rather than treating query generation as the only
+problem to solve.
 
 > **Honest scope.** This is a production-*grade codebase*, not a running production
 > *service*. The architecture, safety, and deployment scaffolding are here and
-> tested. Turning it into a live big-scale service is an operations task: a cloud
-> host, managed Postgres, a paid or higher-tier LLM (the free tier caps throughput),
-> load testing, and monitoring. See "Path to real production" at the bottom.
+> tested. Turning it into a live, large-scale service is an operations task: a cloud
+> host, managed database, a paid or higher-tier LLM (the free tier caps throughput),
+> load testing, and monitoring. See [Path to a Real Product](#path-to-a-real-product-the-operations-half).
 
 ---
 
-## What makes it more than a portfolio project
+## Table of Contents
+
+- [Why This Project](#why-this-project)
+- [Feature Overview](#feature-overview)
+- [The Pipeline](#the-pipeline)
+- [Data Governance (ABAC)](#scope-aware-fail-closed-column-governance-abac)
+- [Evaluation & Results](#evaluation)
+- [Connect Any Database](#connect-any-database-stage-1-bring-your-own-database)
+- [Getting Started](#getting-started)
+- [API Reference](#endpoints)
+- [Tests](#tests)
+- [Configuration](#configuration)
+- [Path to a Real Product](#path-to-a-real-product-the-operations-half)
+- [Tech Stack](#tech-stack)
+
+---
+
+## Why This Project
+
+Most text-to-SQL demonstrations stop at "the model writes a query and you run it."
+That approach is adequate for a prototype but insufficient for a real database with
+sensitive columns, production traffic, or real users. WardenSQL addresses a more
+difficult problem: **what is actually required to expose an LLM-powered query
+interface to a database safely?**
+
+The engineering emphasis is therefore not the prompt itself, but the layers around
+it: proving that a query only touches permitted columns before it executes,
+detecting when a model hallucinates a column that does not exist, determining
+whether the system's stated confidence is empirically trustworthy, and providing
+offline, reproducible evidence that each of these guarantees holds.
+
+## Feature Overview
 
 | Layer | What it does | Where |
 |---|---|---|
@@ -23,7 +60,7 @@ a cost guard, containerised deployment, and CI.
 | **Data governance (ABAC)** | Scope-aware, fail-closed column policy on **canonical** identifiers. A deterministic resolver turns every reference (any alias, join, self-join, CTE, derived table, correlated subquery, set-op, function/CASE/window) into `table.column` — or a precise failure — and the policy engine returns ALLOWED / DENIED / UNRESOLVED / AMBIGUOUS | `app/resolver.py`, `app/policy.py` |
 | **Hallucination detection** | Schema-level (deterministic) + semantic (LLM judge) | `app/schema.py`, `app/providers/` |
 | **Cost guard** | `EXPLAIN`-based rejection of queries that would scan too much | `app/explain.py` |
-| **Result-size cap** | Hard ceiling on rows surfaced to any caller/UI, enforced in the pipeline independent of the SQL `LIMIT` or DB driver — bounds data egress | `app/pipeline.py` |
+| **Result-size cap** | Hard ceiling on rows surfaced to any caller/UI, enforced in the pipeline independent of the SQL `LIMIT` or DB driver | `app/pipeline.py` |
 | **Confidence** | Self-consistency across samples + judge, gated by hard checks | `app/confidence.py` |
 | **Caching** | Repeat questions skip the LLM entirely; schema cached with TTL | `app/cache.py`, `app/db.py` |
 | **Observability** | Structured JSON logs, per-request audit trail, Prometheus metrics | `app/observability.py` |
@@ -34,7 +71,7 @@ a cost guard, containerised deployment, and CI.
 | **Evaluation** | Offline harness: execution accuracy + confidence calibration (ECE, Brier, reliability diagram) over a labeled dataset | `eval/` |
 | **Connect any database** | Point the tool at Postgres / MySQL / SQLite / SQL Server via `.env`; schema auto-discovered; all safety gates apply on every engine | `app/sqlalchemy_db.py`, `app/config.py` |
 
-## The pipeline
+## The Pipeline
 
 ```
 question
@@ -51,12 +88,12 @@ question
   └─ 9. score + audit + cache ..... confidence, audit event, cache result
 ```
 
-The three core ideas from the original design still hold: **the read-only DB role is
-the real guardrail** (the AST check is convenience), **hallucination is two problems**
-(deterministic schema check + LLM judge), and **confidence comes from self-consistency**,
-not the model's self-report.
+Three core design principles hold throughout: **the read-only DB role is the real
+guardrail** (the AST check is convenience, not the last line of defense),
+**hallucination is two problems** (a deterministic schema check plus an LLM judge),
+and **confidence comes from self-consistency**, not the model's self-report.
 
-### Scope-aware, fail-closed column governance (ABAC)
+## Scope-aware, fail-closed column governance (ABAC)
 
 Policies are always written with **canonical** identifiers (`table.column`), never
 aliases:
@@ -120,7 +157,7 @@ Key properties:
 - **AST, not string matching.** A denied `customers.id` never matches `customer_id`,
   and the text `WHERE name = 'SSN expert'` never trips the `ssn` rule.
 - **Read-only.** Writes/DDL/DCL are refused structurally by the resolver *and* the
-  guardrails, on top of the read-only Postgres role — three independent layers.
+  guardrails, on top of the read-only database role — three independent layers.
 
 The security decision is deterministic code, enforced **before** the judge and
 before execution; a high LLM judge score can never override `policy_ok = false`.
@@ -175,8 +212,6 @@ Brier = 0.200). That is textbook **overconfidence**, surfaced instead of assumed
 > Live numbers use the Groq free tier (8000 tokens/min), so the live runner uses
 > 1 sample with light pacing. A paid tier with 5-sample self-consistency would
 > give a richer calibration curve.
-
-![Reliability diagram](eval/reliability.png)
 
 ---
 
@@ -238,7 +273,7 @@ rolls back its transaction (never commits), and you are urged to connect with a
 
 ---
 
-## Run it
+## Getting Started
 
 ### Option A — Docker (recommended; no local Postgres needed)
 
@@ -263,7 +298,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env                   # add your GROQ_API_KEY
 
-createdb shop && psql shop -f sql/setup.sql #for testing purposes
+createdb shop && psql shop -f sql/setup.sql # for testing purposes
 
 uvicorn app.api:app --reload           # UI + API at :8000, API docs at /docs
 # or:
@@ -272,8 +307,8 @@ python -m app.cli "which category sold the most units?"
 
 ### Option C — no Postgres at all (SQLite, fastest way to try it)
 
-Prefer zero database setup? Boot straight onto a SQLite file using the Stage-1
-multi-engine backend:
+For zero database setup, run against a SQLite file using the Stage-1 multi-engine
+backend:
 
 ```bash
 pip install -r requirements.txt
@@ -284,8 +319,8 @@ DB_BACKEND=sqlalchemy DATABASE_URL="sqlite:///$(pwd)/shop.sqlite" \
   GROQ_API_KEY=gsk_your_key uvicorn app.api:app --reload
 ```
 
-Then open the UI and ask away. To attach a different database, edit `DATABASE_URL`
-(and its governance) in `.env` and restart — see "Connect any database" above.
+Then open the UI to submit questions. To attach a different database, edit `DATABASE_URL`
+(and its governance) in `.env` and restart — see [Connect Any Database](#connect-any-database-stage-1-bring-your-own-database).
 
 ### Web UI
 
@@ -309,7 +344,7 @@ static page served by the API (no build step), backed by a Server-Sent-Events st
 | GET | `/ready` | Readiness (checks DB) |
 | GET | `/metrics` | Prometheus metrics |
 
-### Tests
+## Tests
 
 ```bash
 pytest -q          # 198 tests, no DB or API key required
@@ -322,36 +357,45 @@ pytest -q          # 198 tests, no DB or API key required
 All via env / `.env` (see `.env.example`). Highlights for the free tier and scale:
 
 - `NUM_SAMPLES` / `JUDGE_MODE=conditional` — control LLM calls per question.
-- `DENIED_COLUMNS='["customers.ssn"]'` — governance in action; try asking for SSNs.
+- `DENIED_COLUMNS='["customers.ssn"]'` — demonstrates governance; a query
+  referencing this column is blocked regardless of alias or query structure.
 - `MIN_CONFIDENCE_TO_RETURN_ROWS=0.4` — withhold results the system isn't sure about.
 - `API_KEYS` + `RATE_LIMIT_PER_MINUTE` — multi-tenant auth and abuse protection.
 - `BASE_URL` — point at any OpenAI-compatible free endpoint if you outgrow Groq.
 - `DB_BACKEND=sqlalchemy` + `DATABASE_URL=...` — connect Postgres/MySQL/SQLite/SQL
-  Server from `.env`. See "Connect any database" above.
+  Server from `.env`. See [Connect Any Database](#connect-any-database-stage-1-bring-your-own-database).
 
 ## Path to a real product (the operations half)
 
-These need infrastructure/budget, not code, and are the honest gap between this and a
-big-scale service:
+The gap between this codebase and a live, large-scale service is infrastructure
+and budget, not architecture:
 
-1. **Deploy** the container to a host (Fly.io / Railway / Cloud Run) behind TLS.
-2. **Managed database** with read replicas; keep a read-only user.
-3. **Externalise state** — move the cache and rate limiter to Redis so multiple
-   instances share them.
-4. **Ship logs & metrics** to Grafana/Loki or a hosted APM; alert on block-rate and
-   low-confidence spikes.
-5. **LLM budget** — the free tier caps you at ~100–150 questions/day; a paid or
-   higher tier (or self-hosted model) is required for real traffic.
-6. **Load test** (k6/Locust) and tune pool sizes and worker counts.
-7. **Result-based consistency** — compare candidate *result sets*, not just SQL text,
-   for a stronger confidence signal.
-```
+- **Deploy & harden** — host behind TLS with a managed database (read replicas,
+  read-only user), load testing, and tuned pool/worker sizes.
+- **Externalise state** — move the cache and rate limiter to Redis so multiple
+  instances share them.
+- **Observability at scale** — ship logs/metrics to a hosted APM; alert on
+  block-rate and low-confidence spikes.
+- **LLM budget** — the free tier caps throughput (~100–150 questions/day); real
+  traffic needs a paid tier or self-hosted model.
+- **Stronger confidence signal** — compare candidate *result sets*, not just SQL
+  text, for calibration.
 
-**Stage 2 — multi-company SaaS (beyond this codebase).** The Stage-1 config-driven
-"attach any database" feature makes this a single-operator tool: one database per
-running instance, set in `.env`. Turning it into a service many companies sign up
-for adds: user accounts + auth, **encrypted credential storage** (never plaintext),
-strict **tenant isolation** so no company can see another's data or schema, a UI or
-API to manage connections per tenant, **per-company governance**, and per-connection
-eval datasets. That is a product-building effort, deliberately out of scope here —
-Stage 1 demonstrates the "any database" capability end to end.
+**Beyond this codebase:** turning this into multi-company SaaS — user accounts,
+encrypted credential storage, tenant isolation, per-tenant governance — is a
+separate product-building effort. Stage 1 here demonstrates the "any database"
+capability end to end; multi-tenancy is deliberately out of scope.
+
+---
+
+## Tech Stack
+
+**Language & core:** Python, FastAPI, Pydantic Settings
+**SQL parsing/analysis:** sqlglot (AST-based guardrails and column resolver)
+**Databases:** PostgreSQL (psycopg, connection-pooled) and SQLAlchemy (MySQL/MariaDB,
+SQLite, SQL Server) via a shared `Database` interface
+**LLM provider:** Groq (OpenAI-compatible), pluggable via `BASE_URL`
+**Observability:** Structured JSON logging, Prometheus metrics, health/readiness probes
+**Testing & evaluation:** pytest (198 tests, dependency-injected fakes), custom
+calibration harness (ECE, Brier score, reliability diagrams)
+**Deployment:** Docker, docker-compose, CI workflow
